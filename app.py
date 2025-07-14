@@ -231,7 +231,7 @@ def handle_requests():
                 "LikesbeforeCommand": before_like,
                 "LikesafterCommand": after_like,
                 "PlayerNickname": player_name,
-                "AccountLevel": player_level,
+                "PlayerLevel": player_level,
                 "UID": player_uid,
                 "status": status
             }
