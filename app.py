@@ -223,6 +223,7 @@ def handle_requests():
             after_like = int(data_after.get('AccountInfo', {}).get('Likes', 0))
             player_uid = int(data_after.get('AccountInfo', {}).get('UID', 0))
             player_name = str(data_after.get('AccountInfo', {}).get('PlayerNickname', ''))
+            player_level = str(data_after.get('AccountInfo', {}).get('level', ''))
             like_given = after_like - before_like
             status = 1 if like_given != 0 else 2
             result = {
@@ -230,6 +231,7 @@ def handle_requests():
                 "LikesbeforeCommand": before_like,
                 "LikesafterCommand": after_like,
                 "PlayerNickname": player_name,
+                "AccountLevel": player_level,
                 "UID": player_uid,
                 "status": status
             }
