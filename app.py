@@ -14,18 +14,18 @@ from google.protobuf.message import DecodeError
 
 app = Flask(__name__)
 
-def load_tokens(server_name):
+def load_tokens(region):
     try:
-        if server_name == "IND":
+        if region == "IND":
             with open("token_ind.json", "r") as f:
                 tokens = json.load(f)
-        elif server_name in {"BR", "US", "SAC", "NA"}:
+        elif region in {"BR", "US", "SAC", "NA"}:
             with open("token_br.json", "r") as f:
                 tokens = json.load(f)
-        elif server_name == "EU":
+        elif region == "EU":
             with open("token_eu.json", "r") as f:
                 tokens = json.load(f)
-        elif server_name == "VN":  # VN server add kiya
+        elif region == "VN":
             with open("token_vn.json", "r") as f:
                 tokens = json.load(f)
         else:
@@ -33,7 +33,7 @@ def load_tokens(server_name):
                 tokens = json.load(f)
         return tokens
     except Exception as e:
-        app.logger.error(f"Error loading tokens for server {server_name}: {e}")
+        app.logger.error(f"Error loading tokens for region {region}: {e}")
         return None
 
 def encrypt_message(plaintext):
@@ -82,30 +82,34 @@ async def send_request(encrypted_uid, token, url):
         app.logger.error(f"Exception in send_request: {e}")
         return None
 
-async def send_multiple_requests(uid, server_name, url):
+async def send_multiple_requests(uid, region, url):
     try:
-        region = server_name
         protobuf_message = create_protobuf_message(uid, region)
         if protobuf_message is None:
             app.logger.error("Failed to create protobuf message.")
-            return None
+            return None, None
         encrypted_uid = encrypt_message(protobuf_message)
         if encrypted_uid is None:
             app.logger.error("Encryption failed.")
-            return None
+            return None, None
         tasks = []
-        tokens = load_tokens(server_name)
+        tokens = load_tokens(region)
         if tokens is None:
             app.logger.error("Failed to load tokens.")
-            return None
+            return None, None
+
+        used_tokens = set()
+
         for i in range(800):
             token = tokens[i % len(tokens)]["token"]
+            used_tokens.add(token)
             tasks.append(send_request(encrypted_uid, token, url))
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results
+        return results, used_tokens
     except Exception as e:
         app.logger.error(f"Exception in send_multiple_requests: {e}")
-        return None
+        return None, None
 
 def create_protobuf(uid):
     try:
@@ -124,11 +128,11 @@ def enc(uid):
     encrypted_uid = encrypt_message(protobuf_data)
     return encrypted_uid
 
-def make_request(encrypt, server_name, token):
+def make_request(encrypt, region, token):
     try:
-        if server_name == "IND":
+        if region == "IND":
             url = "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
-        elif server_name in {"BR", "US", "SAC", "NA"}:
+        elif region in {"BR", "US", "SAC", "NA"}:
             url = "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
         else:
             url = "https://clientbp.ggblueshark.com/GetPlayerPersonalShow"
@@ -170,13 +174,13 @@ def decode_protobuf(binary):
 @app.route('/like', methods=['GET'])
 def handle_requests():
     uid = request.args.get("uid")
-    server_name = request.args.get("server_name", "").upper()
-    if not uid or not server_name:
-        return jsonify({"error": "UID and server_name are required"}), 400
+    region = request.args.get("region", "").upper()
+    if not uid or not region:
+        return jsonify({"error": "UID and region are required"}), 400
 
     try:
         def process_request():
-            tokens = load_tokens(server_name)
+            tokens = load_tokens(region)
             if tokens is None:
                 raise Exception("Failed to load tokens.")
             token = tokens[0]['token']
@@ -184,8 +188,8 @@ def handle_requests():
             if encrypted_uid is None:
                 raise Exception("Encryption of UID failed.")
 
-            # الحصول على بيانات اللاعب قبل تنفيذ عملية الإعجاب
-            before = make_request(encrypted_uid, server_name, token)
+            # Before Like
+            before = make_request(encrypted_uid, region, token)
             if before is None:
                 raise Exception("Failed to retrieve initial player info.")
             try:
@@ -200,19 +204,19 @@ def handle_requests():
                 before_like = 0
             app.logger.info(f"Likes before command: {before_like}")
 
-            # تحديد رابط الإعجاب حسب اسم السيرفر
-            if server_name == "IND":
+            # Like endpoint URL
+            if region == "IND":
                 url = "https://client.ind.freefiremobile.com/LikeProfile"
-            elif server_name in {"BR", "US", "SAC", "NA"}:
+            elif region in {"BR", "US", "SAC", "NA"}:
                 url = "https://client.us.freefiremobile.com/LikeProfile"
             else:
                 url = "https://clientbp.ggblueshark.com/LikeProfile"
 
-            # إرسال الطلبات بشكل غير متزامن
-            asyncio.run(send_multiple_requests(uid, server_name, url))
+            # Async like sending
+            responses, used_tokens = asyncio.run(send_multiple_requests(uid, region, url))
 
-            # الحصول على بيانات اللاعب بعد تنفيذ عملية الإعجاب
-            after = make_request(encrypted_uid, server_name, token)
+            # After Like
+            after = make_request(encrypted_uid, region, token)
             if after is None:
                 raise Exception("Failed to retrieve player info after like requests.")
             try:
@@ -226,6 +230,7 @@ def handle_requests():
             player_level = str(data_after.get('AccountInfo', {}).get('level', ''))
             like_given = after_like - before_like
             status = 1 if like_given != 0 else 2
+
             result = {
                 "LikesGivenByAPI": like_given,
                 "LikesbeforeCommand": before_like,
@@ -233,7 +238,9 @@ def handle_requests():
                 "PlayerNickname": player_name,
                 "PlayerLevel": player_level,
                 "UID": player_uid,
-                "status": status
+                "status": status,
+                "TotalRequestsSent": len(responses) if responses else 0,
+                "UniqueTokensUsed": len(used_tokens) if used_tokens else 0
             }
             return result
 
