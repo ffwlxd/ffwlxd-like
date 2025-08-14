@@ -92,21 +92,44 @@ async def send_multiple_requests(uid, region, url):
         if encrypted_uid is None:
             app.logger.error("Encryption failed.")
             return None, None
-        tasks = []
+
         tokens = load_tokens(region)
         if tokens is None:
             app.logger.error("Failed to load tokens.")
             return None, None
 
+        total_tokens = [t["token"] for t in tokens]
         used_tokens = set()
+        tasks = []
 
-        for i in range(800):
-            token = tokens[i % len(tokens)]["token"]
-            used_tokens.add(token)
-            tasks.append(send_request(encrypted_uid, token, url))
+        batch_size = 100   # 100 tokens per batch
+        request_per_batch = 30
+
+        token_index = 0
+
+        while token_index < len(total_tokens):
+            # Pick the next batch of unused tokens
+            current_batch = []
+            count = 0
+            while count < batch_size and token_index < len(total_tokens):
+                token = total_tokens[token_index]
+                if token not in used_tokens:
+                    current_batch.append(token)
+                    used_tokens.add(token)
+                    count += 1
+                token_index += 1
+
+            if not current_batch:
+                break  # No more tokens left
+
+            # Use the current batch for a fixed number of requests
+            for i in range(request_per_batch):
+                token = current_batch[i % len(current_batch)]
+                tasks.append(send_request(encrypted_uid, token, url))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return results, used_tokens
+
     except Exception as e:
         app.logger.error(f"Exception in send_multiple_requests: {e}")
         return None, None
