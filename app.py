@@ -87,52 +87,24 @@ async def send_multiple_requests(uid, region, url):
         protobuf_message = create_protobuf_message(uid, region)
         if protobuf_message is None:
             app.logger.error("Failed to create protobuf message.")
-            return None, None
+            return None
         encrypted_uid = encrypt_message(protobuf_message)
         if encrypted_uid is None:
             app.logger.error("Encryption failed.")
-            return None, None
-
+            return None
+        tasks = []
         tokens = load_tokens(region)
         if tokens is None:
             app.logger.error("Failed to load tokens.")
-            return None, None
-
-        total_tokens = [t["token"] for t in tokens]
-        used_tokens = set()
-        tasks = []
-
-        batch_size = 100   # 100 tokens per batch
-        request_per_batch = 30
-
-        token_index = 0
-
-        while token_index < len(total_tokens):
-            # Pick the next batch of unused tokens
-            current_batch = []
-            count = 0
-            while count < batch_size and token_index < len(total_tokens):
-                token = total_tokens[token_index]
-                if token not in used_tokens:
-                    current_batch.append(token)
-                    used_tokens.add(token)
-                    count += 1
-                token_index += 1
-
-            if not current_batch:
-                break  # No more tokens left
-
-            # Use the current batch for a fixed number of requests
-            for i in range(request_per_batch):
-                token = current_batch[i % len(current_batch)]
-                tasks.append(send_request(encrypted_uid, token, url))
-
+            return None
+        for i in range(800):
+            token = tokens[i % len(tokens)]["token"]
+            tasks.append(send_request(encrypted_uid, token, url))
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results, used_tokens
-
+        return results
     except Exception as e:
         app.logger.error(f"Exception in send_multiple_requests: {e}")
-        return None, None
+        return None
 
 def create_protobuf(uid):
     try:
@@ -210,8 +182,6 @@ def handle_requests():
             encrypted_uid = enc(uid)
             if encrypted_uid is None:
                 raise Exception("Encryption of UID failed.")
-
-            # Before Like
             before = make_request(encrypted_uid, region, token)
             if before is None:
                 raise Exception("Failed to retrieve initial player info.")
@@ -225,20 +195,13 @@ def handle_requests():
                 before_like = int(before_like)
             except Exception:
                 before_like = 0
-            app.logger.info(f"Likes before command: {before_like}")
-
-            # Like endpoint URL
             if region == "IND":
                 url = "https://client.ind.freefiremobile.com/LikeProfile"
             elif region in {"BR", "US", "SAC", "NA"}:
                 url = "https://client.us.freefiremobile.com/LikeProfile"
             else:
                 url = "https://clientbp.ggblueshark.com/LikeProfile"
-
-            # Async like sending
-            responses, used_tokens = asyncio.run(send_multiple_requests(uid, region, url))
-
-            # After Like
+            asyncio.run(send_multiple_requests(uid, region, url))
             after = make_request(encrypted_uid, region, token)
             if after is None:
                 raise Exception("Failed to retrieve player info after like requests.")
@@ -253,7 +216,6 @@ def handle_requests():
             player_level = str(data_after.get('AccountInfo', {}).get('level', ''))
             like_given = after_like - before_like
             status = 1 if like_given != 0 else 2
-
             result = {
                 "LikesGivenByAPI": like_given,
                 "LikesbeforeCommand": before_like,
@@ -261,12 +223,9 @@ def handle_requests():
                 "PlayerNickname": player_name,
                 "PlayerLevel": player_level,
                 "UID": player_uid,
-                "status": status,
-                "TotalRequestsSent": len(responses) if responses else 0,
-                "UniqueTokensUsed": len(used_tokens) if used_tokens else 0
+                "status": status
             }
             return result
-
         result = process_request()
         return jsonify(result)
     except Exception as e:
